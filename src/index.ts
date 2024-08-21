@@ -2,43 +2,53 @@ import inquirer from "inquirer";
 import { QueryResult } from "pg";
 import { pool, connectToDb } from "./connection.js";
 
+// Establish connection to the database
 await connectToDb();
 
-const getDepartments = async (): Promise<string[]> => {
+// *** Data Fetching Functions ***
+
+// Fetches all department names
+const fetchDepartments = async (): Promise<string[]> => {
   const query = "SELECT name FROM department;";
   const result: QueryResult = await pool.query(query);
   return result.rows.map((row) => row.name);
 };
 
-const getRoles = async (): Promise<string[]> => {
+// Fetches all role titles
+const fetchRoles = async (): Promise<string[]> => {
   const query = "SELECT title FROM role;";
   const result: QueryResult = await pool.query(query);
   return result.rows.map((row) => row.title);
 };
 
-const getManagers = async (): Promise<string[]> => {
+// Fetches all managers' names
+const fetchManagers = async (): Promise<string[]> => {
   const query = `
-          SELECT first_name || ' ' || last_name AS manager_name 
-          FROM employee
-          WHERE manager_id IS NULL;
-      `;
+    SELECT first_name || ' ' || last_name AS manager_name 
+    FROM employee
+    WHERE manager_id IS NULL;
+  `;
   const result: QueryResult = await pool.query(query);
   const managers = result.rows.map((row) => row.manager_name);
-  managers.unshift("Null"); 
+  managers.unshift("Null"); // Adds an option for no manager
   return managers;
 };
 
-const getEmployees = async (): Promise<string[]> => {
+// Fetches all employees' names
+const fetchEmployees = async (): Promise<string[]> => {
   const query = `
-        SELECT e.id, e.first_name || ' ' || e.last_name AS employee_name
-        FROM employee e;
-    `;
+    SELECT e.id, e.first_name || ' ' || e.last_name AS employee_name
+    FROM employee e;
+  `;
   const result: QueryResult = await pool.query(query);
   return result.rows.map((row) => row.employee_name);
 };
 
-const addRole = async (): Promise<void> => {
-  const departments = await getDepartments();
+// *** Action Functions ***
+
+// Creates a new role in the database
+const createRole = async (): Promise<void> => {
+  const departments = await fetchDepartments();
 
   inquirer
     .prompt([
@@ -62,9 +72,9 @@ const addRole = async (): Promise<void> => {
     .then((answers) => {
       const { roleName, salary, department } = answers;
       const addRoleQuery = `
-            INSERT INTO role (title, salary, department_id)
-            VALUES ($1, $2, (SELECT id FROM department WHERE name = $3));
-        `;
+        INSERT INTO role (title, salary, department_id)
+        VALUES ($1, $2, (SELECT id FROM department WHERE name = $3));
+      `;
 
       pool.query(
         addRoleQuery,
@@ -75,19 +85,20 @@ const addRole = async (): Promise<void> => {
           } else {
             console.log(`Added ${roleName} to the database.`);
           }
-          performActions();
+          displayMenu();
         }
       );
     });
 };
 
-const addDepartment = (): void => {
+// Creates a new department in the database
+const createDepartment = (): void => {
   inquirer
     .prompt([
       {
         type: "input",
         name: "departmentName",
-        message: "What is the name of your department",
+        message: "What is the name of your department?",
       },
     ])
     .then((answers) => {
@@ -102,22 +113,17 @@ const addDepartment = (): void => {
             console.error(err);
           } else {
             console.log(`Added ${departmentName} to the database.`);
-            performActions();
+            displayMenu();
           }
         }
       );
     });
 };
 
-const addEmployee = async (): Promise<void> => {
-  const managers = await getManagers();
-  const roles = await getRoles();
-
-  const addEmployeeQuery = `
-    INSERT INTO employee (first_name, last_name, role_id, manager_id)
-    VALUES ($1, $2, (SELECT id FROM role WHERE title = $3 LIMIT 1), 
-    (SELECT id FROM employee WHERE first_name = $4 AND last_name = $5 LIMIT 1));
-    `;
+// Creates a new employee in the database
+const createEmployee = async (): Promise<void> => {
+  const managers = await fetchManagers();
+  const roles = await fetchRoles();
 
   inquirer
     .prompt([
@@ -148,6 +154,14 @@ const addEmployee = async (): Promise<void> => {
       const { firstName, lastName, employeeRole, manager } = answers;
       const managerId = manager === "Null" ? null : manager.split(" ");
 
+      const addEmployeeQuery = `
+        INSERT INTO employee (first_name, last_name, role_id, manager_id)
+        VALUES ($1, $2, 
+          (SELECT id FROM role WHERE title = $3 LIMIT 1), 
+          (SELECT id FROM employee WHERE first_name = $4 AND last_name = $5 LIMIT 1)
+        );
+      `;
+
       try {
         await pool.query(addEmployeeQuery, [
           firstName,
@@ -160,13 +174,14 @@ const addEmployee = async (): Promise<void> => {
       } catch (error) {
         console.error("Error adding employee:", error);
       }
-      performActions();
+      displayMenu();
     });
 };
 
-const updateEmployee = async (): Promise<void> => {
-  const employees = await getEmployees();
-  const roles = await getRoles();
+// Updates an employee's role in the database
+const updateEmployeeRole = async (): Promise<void> => {
+  const employees = await fetchEmployees();
+  const roles = await fetchRoles();
 
   inquirer
     .prompt([
@@ -187,10 +202,10 @@ const updateEmployee = async (): Promise<void> => {
       const { employee, role } = answers;
       const [firstName, lastName] = employee.split(" ");
       const updateEmployeeRoleQuery = `
-                UPDATE employee
-                SET role_id = (SELECT id FROM role WHERE title = $1 LIMIT 1)
-                WHERE first_name = $2 AND last_name = $3;
-            `;
+        UPDATE employee
+        SET role_id = (SELECT id FROM role WHERE title = $1 LIMIT 1)
+        WHERE first_name = $2 AND last_name = $3;
+      `;
 
       pool.query(
         updateEmployeeRoleQuery,
@@ -201,13 +216,105 @@ const updateEmployee = async (): Promise<void> => {
           } else {
             console.log(`Updated employee's role in the database.`);
           }
-          performActions();
+          displayMenu();
         }
       );
     });
 };
 
-const performActions = (): void => {
+// Deletes an entity (Employee, Role, or Department) from the database
+const deleteEntity = async (): Promise<void> => {
+  const entityChoices = ["Employee", "Role", "Department"];
+
+  inquirer
+    .prompt([
+      {
+        type: "list",
+        name: "entity",
+        message: "Which entity would you like to delete?",
+        choices: entityChoices,
+      },
+    ])
+    .then(async (answers) => {
+      const { entity } = answers;
+
+      switch (entity) {
+        case "Employee":
+          const employees = await fetchEmployees();
+          inquirer
+            .prompt([
+              {
+                type: "list",
+                name: "employee",
+                message: "Which employee would you like to delete?",
+                choices: employees,
+              },
+            ])
+            .then(async (answers) => {
+              const { employee } = answers;
+              const [firstName, lastName] = employee.split(" ");
+              const deleteEmployeeQuery = `
+                DELETE FROM employee WHERE first_name = $1 AND last_name = $2;
+              `;
+              await pool.query(deleteEmployeeQuery, [firstName, lastName]);
+              console.log(`Deleted employee: ${employee}`);
+              displayMenu();
+            });
+          break;
+
+        case "Role":
+          const roles = await fetchRoles();
+          inquirer
+            .prompt([
+              {
+                type: "list",
+                name: "role",
+                message: "Which role would you like to delete?",
+                choices: roles,
+              },
+            ])
+            .then(async (answers) => {
+              const { role } = answers;
+              const deleteRoleQuery = `
+                DELETE FROM role WHERE title = $1;
+              `;
+              await pool.query(deleteRoleQuery, [role]);
+              console.log(`Deleted role: ${role}`);
+              displayMenu();
+            });
+          break;
+
+        case "Department":
+          const departments = await fetchDepartments();
+          inquirer
+            .prompt([
+              {
+                type: "list",
+                name: "department",
+                message: "Which department would you like to delete?",
+                choices: departments,
+              },
+            ])
+            .then(async (answers) => {
+              const { department } = answers;
+              const deleteDepartmentQuery = `
+                DELETE FROM department WHERE name = $1;
+              `;
+              await pool.query(deleteDepartmentQuery, [department]);
+              console.log(`Deleted department: ${department}`);
+              displayMenu();
+            });
+          break;
+
+        default:
+          break;
+      }
+    });
+};
+
+// *** Main Menu ***
+
+const displayMenu = (): void => {
   inquirer
     .prompt([
       {
@@ -222,6 +329,7 @@ const performActions = (): void => {
           "Add Role",
           "View All Departments",
           "Add Department",
+          "Delete Entity",
           "Quit",
         ],
       },
@@ -255,15 +363,15 @@ const performActions = (): void => {
             } else {
               console.table(res.rows);
             }
-            performActions();
+            displayMenu();
           });
           break;
         case "Add Employee":
-          addEmployee();
+          createEmployee();
 
           break;
         case "Update Employee Role":
-          updateEmployee();
+          updateEmployeeRole();
 
           break;
         case "View All Roles":
@@ -279,11 +387,11 @@ const performActions = (): void => {
             } else {
               console.table(res.rows);
             }
-            performActions();
+            displayMenu();
           });
           break;
         case "Add Role":
-          addRole();
+          createRole();
 
           break;
         case "View All Departments":
@@ -299,14 +407,19 @@ const performActions = (): void => {
             } else {
               console.table(res.rows);
             }
-            performActions();
+            displayMenu();
           });
 
           break;
-        case "Add Department":
-          addDepartment();
 
+        case "Add Department":
+          createDepartment();
           break;
+
+        case "Delete Entity":
+          deleteEntity();
+          break;
+
         case "Quit":
           process.exit(0);
           break;
@@ -316,4 +429,4 @@ const performActions = (): void => {
     });
 };
 
-performActions();
+displayMenu();
